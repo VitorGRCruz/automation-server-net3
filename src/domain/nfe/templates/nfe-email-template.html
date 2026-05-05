@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sua Nota Fiscal - NET3 WIFI</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f5; color: #333333;">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f4f4f5; padding: 40px 20px;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.05);">
+                    <tr>
+                        <td align="center" style="background-color: #0C3094; padding: 30px 20px;">
+                            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 600; letter-spacing: 1px;">NET3 WIFI</h1>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 40px 30px;">
+                            <p style="margin: 0 0 20px 0; font-size: 16px; line-height: 1.6;">
+                                Olá, <strong>{{nome_cliente}}</strong>,
+                            </p>
+                            <p style="margin: 0 0 30px 0; font-size: 16px; line-height: 1.6; color: #555555;">
+                                A sua nota fiscal referente aos serviços da <strong>NET3 WIFI</strong> acaba de ser emitida. Abaixo você confere os principais dados do documento:
+                            </p>
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #fafafa; border-left: 4px solid #FC9102; border-radius: 4px; margin-bottom: 30px;">
+                                <tr>
+                                    <td style="padding: 20px;">
+                                        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                                            <tr>
+                                                <td style="padding-bottom: 12px;">
+                                                    <span style="font-size: 13px; color: #777777; text-transform: uppercase; letter-spacing: 0.5px;">Número da NF</span><br>
+                                                    <strong style="color: #0C3094; font-size: 16px;">{{numero_nf}}</strong>
+                                                </td>
+                                                <td style="padding-bottom: 12px;">
+                                                    <span style="font-size: 13px; color: #777777; text-transform: uppercase; letter-spacing: 0.5px;">Valor Total</span><br>
+                                                    <strong style="color: #0C3094; font-size: 16px;">R$ {{valor_total}}</strong>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td colspan="2" style="padding-top: 10px; border-top: 1px solid #eeeeee;">
+                                                    <span style="font-size: 13px; color: #777777; text-transform: uppercase; letter-spacing: 0.5px;">Chave de Acesso</span><br>
+                                                    <span style="color: #444444; font-family: 'Courier New', Courier, monospace; font-size: 14px; word-break: break-all;">{{nfe_chave}}</span>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #777777;">
+                                Você pode consultar a autenticidade deste documento no portal nacional da Nota Fiscal Eletrônica utilizando a chave de acesso acima. O arquivo original da nota fiscal segue em anexo em formato <strong>PDF</strong>.
+                            </p>
+                            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 25px; border-top: 1px solid #eeeeee;">
+                                <tr>
+                                    <td style="padding-top: 20px;">
+                                        <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #555555;">
+                                            Em caso de dúvidas sobre sua fatura, entre em contato conosco pelo telefone: </br>
+                                            <strong style="color: #0C3094;">0800 600 8983</strong>
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td align="center" style="background-color: #f9f9f9; padding: 25px 20px; border-top: 1px solid #eeeeee;">
+                            <p style="margin: 0; font-size: 12px; color: #999999; line-height: 1.5;">
+                                <strong>NET3 WIFI</strong><br>
+                                Este é um e-mail de envio automático. Por favor, não responda.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

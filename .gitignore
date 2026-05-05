@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Package manager caches
+.pnpm-store/
+.npm/
+.yarn/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build outputs
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Runtime logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files and caches
+.cache/
+.tmp/
+tmp/
+.eslintcache
+
+# Local tooling
+.codex/
+
+# Editor and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

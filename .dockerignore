@@ -1,0 +1,10 @@
+.git
+.gitignore
+.codex
+.env
+.env.*
+!.env.example
+dist
+docs
+node_modules
+.pnpm-store

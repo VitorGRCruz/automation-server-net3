@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS workflow_step_idempotency (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  workflow_name VARCHAR(120) NOT NULL,
+  workflow_id VARCHAR(255) NOT NULL,
+  step_name VARCHAR(120) NOT NULL,
+  idempotency_key VARCHAR(255) NOT NULL,
+  request_id VARCHAR(255) NOT NULL,
+  payload_hash CHAR(64) NOT NULL,
+  execution_status VARCHAR(40) NOT NULL,
+  lease_token CHAR(36) NULL,
+  attempt_count INT UNSIGNED NOT NULL DEFAULT 1,
+  last_attempted_at DATETIME NULL,
+  pending_expires_at DATETIME NULL,
+  external_reference VARCHAR(255) NULL,
+  result_payload_json LONGTEXT NULL,
+  created_at DATETIME NOT NULL,
+  updated_at DATETIME NOT NULL,
+  completed_at DATETIME NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_workflow_step_idempotency (workflow_name, step_name, idempotency_key),
+  KEY idx_workflow_step_idempotency_workflow (workflow_id, step_name),
+  KEY idx_workflow_step_idempotency_status (execution_status, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

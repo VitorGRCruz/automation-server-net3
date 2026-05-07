@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
   NFE_EMAIL_DISPATCH_SALE_STATUSES,
   type NfeEmailDispatchSaleStatus,
@@ -19,16 +19,49 @@ import {
   type ListNfeEmailDispatchCustomersApiInput,
   type ListNfeEmailDispatchSalesApiInput,
 } from "../nfe/nfe-email-dispatch-api.service.js";
-import { executeManualNfeEmailDispatchSaleWorkflow } from "../../temporal/client/nfe-email-dispatch-single-sale.client.js";
+import {
+  ManualNfeEmailDispatchWorkflowError,
+  executeManualNfeEmailDispatchSaleWorkflow,
+} from "../../temporal/client/nfe-email-dispatch-single-sale.client.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const SALE_STATUS_SET = new Set<string>(NFE_EMAIL_DISPATCH_SALE_STATUSES);
+const MANUAL_SALE_ALREADY_SENT_CODE = "NFE_MANUAL_ALREADY_SENT";
+const MANUAL_SALE_ALREADY_RUNNING_CODE = "NFE_MANUAL_ALREADY_RUNNING";
 
 type QueryRecord = Record<string, unknown>;
 interface ProcessSingleSaleRouteBody {
   nfeEmailDispatchSaleId: number;
   erpSaleId: number;
+}
+
+type ManualProcessSingleSaleSeverity = "success" | "warning" | "error";
+
+type ExecutedManualWorkflowResult = Awaited<
+  ReturnType<typeof executeManualNfeEmailDispatchSaleWorkflow>
+>;
+
+interface ManualProcessSingleSaleSuccessResponse {
+  ok: true;
+  code:
+    | "NFE_MANUAL_SENT"
+    | "NFE_MANUAL_FAILED_TRANSIENT"
+    | "NFE_MANUAL_FAILED_FINAL"
+    | "NFE_MANUAL_DELIVERY_UNKNOWN";
+  severity: "success" | "error";
+  message: string;
+  workflowId: string;
+  runId: string | null;
+  result: ExecutedManualWorkflowResult["result"];
+}
+
+interface ManualProcessSingleSaleErrorResponse {
+  ok: false;
+  code: string;
+  severity: ManualProcessSingleSaleSeverity;
+  message: string;
+  error: string;
 }
 
 export async function nfeEmailDispatchRoute(
@@ -126,29 +159,29 @@ export async function nfeEmailDispatchRoute(
         },
         async (request, reply) => {
           const input = normalizeProcessSingleSaleBody(request.body);
-          const execution = await executeManualNfeEmailDispatchSaleWorkflow({
-            requestId: request.id,
-            ...input,
-          });
+          try {
+            const execution = await executeManualNfeEmailDispatchSaleWorkflow({
+              requestId: request.id,
+              ...input,
+            });
+            const response = buildManualProcessSingleSaleSuccessResponse(
+              execution,
+            );
 
-          request.log.info(
-            {
-              workflowId: execution.workflowId,
-              runId: execution.runId,
-              nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
-              erpSaleId: input.erpSaleId,
-              finalStatus: execution.result.status,
-              attemptCount: execution.result.attemptCount,
-            },
-            "Completed manual single NF-e email dispatch workflow",
-          );
+            logManualProcessSingleSaleSuccess(request, input, response);
 
-          return reply.status(200).send({
-            ok: true,
-            workflowId: execution.workflowId,
-            runId: execution.runId,
-            result: execution.result,
-          });
+            return reply.status(200).send(response);
+          } catch (error) {
+            if (!(error instanceof ManualNfeEmailDispatchWorkflowError)) {
+              throw error;
+            }
+
+            const response = buildManualProcessSingleSaleErrorResponse(error);
+
+            logManualProcessSingleSaleError(request, input, error, response);
+
+            return reply.status(error.statusCode).send(response);
+          }
         },
       );
     },
@@ -156,6 +189,133 @@ export async function nfeEmailDispatchRoute(
       prefix: "/api/nfe/email-dispatch",
     },
   );
+}
+
+function buildManualProcessSingleSaleSuccessResponse(
+  execution: ExecutedManualWorkflowResult,
+): ManualProcessSingleSaleSuccessResponse {
+  return {
+    ok: true,
+    code: resolveManualProcessSingleSaleSuccessCode(execution.result.status),
+    severity: execution.result.status === "SENT" ? "success" : "error",
+    message: resolveManualProcessSingleSaleSuccessMessage(execution.result),
+    workflowId: execution.workflowId,
+    runId: execution.runId ?? null,
+    result: execution.result,
+  };
+}
+
+function buildManualProcessSingleSaleErrorResponse(
+  error: ManualNfeEmailDispatchWorkflowError,
+): ManualProcessSingleSaleErrorResponse {
+  return {
+    ok: false,
+    code: error.code,
+    severity: resolveManualProcessSingleSaleErrorSeverity(error.code),
+    message: error.message,
+    error: error.message,
+  };
+}
+
+function resolveManualProcessSingleSaleSuccessCode(
+  status: ExecutedManualWorkflowResult["result"]["status"],
+): ManualProcessSingleSaleSuccessResponse["code"] {
+  switch (status) {
+    case "SENT":
+      return "NFE_MANUAL_SENT";
+    case "FAILED_TRANSIENT":
+      return "NFE_MANUAL_FAILED_TRANSIENT";
+    case "FAILED_FINAL":
+      return "NFE_MANUAL_FAILED_FINAL";
+    case "DELIVERY_UNKNOWN":
+      return "NFE_MANUAL_DELIVERY_UNKNOWN";
+  }
+}
+
+function resolveManualProcessSingleSaleSuccessMessage(
+  result: ExecutedManualWorkflowResult["result"],
+): string {
+  if (result.errorMessage?.trim()) {
+    return result.errorMessage;
+  }
+
+  switch (result.status) {
+    case "SENT":
+      return "NF-e reenviada por e-mail com sucesso.";
+    case "FAILED_TRANSIENT":
+      return "A tentativa manual falhou temporariamente.";
+    case "FAILED_FINAL":
+      return "A tentativa manual falhou em definitivo.";
+    case "DELIVERY_UNKNOWN":
+      return "A entrega do e-mail ficou em estado indefinido.";
+  }
+}
+
+function resolveManualProcessSingleSaleErrorSeverity(
+  code: string,
+): ManualProcessSingleSaleSeverity {
+  if (
+    code === MANUAL_SALE_ALREADY_RUNNING_CODE ||
+    code === MANUAL_SALE_ALREADY_SENT_CODE
+  ) {
+    return "warning";
+  }
+
+  return "error";
+}
+
+function logManualProcessSingleSaleSuccess(
+  request: FastifyRequest,
+  input: ProcessSingleSaleRouteBody,
+  response: ManualProcessSingleSaleSuccessResponse,
+): void {
+  const context = {
+    workflowId: response.workflowId,
+    runId: response.runId,
+    nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
+    erpSaleId: input.erpSaleId,
+    responseCode: response.code,
+    severity: response.severity,
+    message: response.message,
+    finalStatus: response.result.status,
+    attemptCount: response.result.attemptCount,
+  };
+
+  if (response.result.status === "SENT") {
+    request.log.info(context, "Manual single NF-e email dispatch succeeded");
+    return;
+  }
+
+  request.log.warn(
+    context,
+    "Manual single NF-e email dispatch completed without confirmed success",
+  );
+}
+
+function logManualProcessSingleSaleError(
+  request: FastifyRequest,
+  input: ProcessSingleSaleRouteBody,
+  error: ManualNfeEmailDispatchWorkflowError,
+  response: ManualProcessSingleSaleErrorResponse,
+): void {
+  const context = {
+    nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
+    erpSaleId: input.erpSaleId,
+    responseCode: response.code,
+    severity: response.severity,
+    statusCode: error.statusCode,
+    message: response.message,
+  };
+
+  if (
+    response.code === MANUAL_SALE_ALREADY_RUNNING_CODE ||
+    response.code === MANUAL_SALE_ALREADY_SENT_CODE
+  ) {
+    request.log.info(context, "Manual single NF-e email dispatch request was rejected");
+    return;
+  }
+
+  request.log.warn(context, "Manual single NF-e email dispatch request failed");
 }
 
 function normalizeProcessSingleSaleBody(

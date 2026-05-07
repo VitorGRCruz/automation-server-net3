@@ -20,7 +20,8 @@ import { processManualNfeEmailDispatchSaleWorkflow } from "../workflows/nfe/proc
 import { createTemporalClient, createTemporalConnection } from "./temporal-client.js";
 
 const MANUAL_SALE_NOT_FOUND_FAILURE_TYPE = "NFE_MANUAL_SALE_NOT_FOUND";
-const MANUAL_SALE_CONFLICT_FAILURE_TYPE = "NFE_MANUAL_SALE_CONFLICT";
+const MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE = "NFE_MANUAL_ALREADY_SENT";
+const MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE = "NFE_MANUAL_ALREADY_RUNNING";
 const MANUAL_SALE_INVALID_INPUT_FAILURE_TYPE = "NFE_MANUAL_SALE_INVALID_INPUT";
 
 export interface ExecuteManualNfeEmailDispatchSaleWorkflowParams {
@@ -196,7 +197,7 @@ function normalizeManualWorkflowError(error: unknown): Error {
     return new ManualNfeEmailDispatchWorkflowError({
       message: "A manual NF-e processing workflow with the same workflowId is already running",
       statusCode: 409,
-      code: "NFE_MANUAL_WORKFLOW_ALREADY_STARTED",
+      code: MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE,
     });
   }
 
@@ -208,11 +209,12 @@ function normalizeManualWorkflowError(error: unknown): Error {
           statusCode: 404,
           code: MANUAL_SALE_NOT_FOUND_FAILURE_TYPE,
         });
-      case MANUAL_SALE_CONFLICT_FAILURE_TYPE:
+      case MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE:
+      case MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE:
         return new ManualNfeEmailDispatchWorkflowError({
           message: error.cause.message,
           statusCode: 409,
-          code: MANUAL_SALE_CONFLICT_FAILURE_TYPE,
+          code: error.cause.type,
         });
       case MANUAL_SALE_INVALID_INPUT_FAILURE_TYPE:
       case "INVALID_WORKFLOW_INPUT":

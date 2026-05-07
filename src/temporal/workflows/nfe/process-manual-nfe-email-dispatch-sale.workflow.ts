@@ -30,7 +30,8 @@ import {
 } from "./process-single-nfe-email-dispatch-sale.shared.js";
 
 const MANUAL_SALE_NOT_FOUND_FAILURE_TYPE = "NFE_MANUAL_SALE_NOT_FOUND";
-const MANUAL_SALE_CONFLICT_FAILURE_TYPE = "NFE_MANUAL_SALE_CONFLICT";
+const MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE = "NFE_MANUAL_ALREADY_SENT";
+const MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE = "NFE_MANUAL_ALREADY_RUNNING";
 const MANUAL_SALE_INVALID_INPUT_FAILURE_TYPE = "NFE_MANUAL_SALE_INVALID_INPUT";
 
 const { loadNfeEmailDispatchSaleForManualProcessingActivity } =
@@ -98,7 +99,7 @@ export async function processManualNfeEmailDispatchSaleWorkflow(
   validateManualWorkflowInput(input, loadedSale);
 
   if (loadedSale.status === "SENT") {
-    throwConflict(
+    throwAlreadySent(
       `NF-e sale ${input.nfeEmailDispatchSaleId} was already sent and cannot be reprocessed manually`,
     );
   }
@@ -111,11 +112,36 @@ export async function processManualNfeEmailDispatchSaleWorkflow(
     attemptNumber,
     runtimeScope: runtimePolicy.idempotencyScope,
   });
+  let leaseToken: string | null = null;
 
-  if (lockResult.status !== "ACQUIRED") {
-    throwConflict(
-      `NF-e sale ${input.nfeEmailDispatchSaleId} is already being processed for attempt ${attemptNumber}`,
-    );
+  switch (lockResult.status) {
+    case "ACQUIRED":
+      leaseToken = lockResult.leaseToken;
+      break;
+    case "PENDING":
+      return throwAlreadyRunning(
+        `NF-e sale ${input.nfeEmailDispatchSaleId} is already being processed for attempt ${attemptNumber}`,
+      );
+    case "ALREADY_PROCESSED": {
+      const reloadedSale = await loadManualSaleOrFail(
+        input.nfeEmailDispatchSaleId,
+        runtimePolicy.idempotencyScope,
+      );
+      const idempotentResult = mapLoadedSaleToIdempotentWorkflowResult(
+        reloadedSale,
+        input.erpSaleId,
+        attemptNumber,
+      );
+
+      if (idempotentResult !== null) {
+        return idempotentResult;
+      }
+
+      throw new Error(
+        `NF-e sale ${input.nfeEmailDispatchSaleId} reported a completed manual attempt ${attemptNumber}, ` +
+          `but its persisted snapshot is status ${reloadedSale.status} with attemptCount ${reloadedSale.attemptCount}`,
+      );
+    }
   }
 
   let finalResult: FinalizeManualNfeEmailDispatchSaleActivityResult | null = null;
@@ -144,13 +170,13 @@ export async function processManualNfeEmailDispatchSaleWorkflow(
 
     return mapFinalizationResultToWorkflowResult(finalResult, input.erpSaleId);
   } finally {
-    if (finalResult !== null) {
+    if (finalResult !== null && leaseToken !== null) {
       await completeAttemptLockBestEffort({
         workflowId: currentWorkflowInfo.workflowId,
         nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
         attemptNumber,
         runtimeScope: runtimePolicy.idempotencyScope,
-        leaseToken: lockResult.leaseToken,
+        leaseToken,
         finalStatus: finalResult.status,
       });
     }
@@ -288,6 +314,35 @@ function mapFinalizationResultToWorkflowResult(
   };
 }
 
+function mapLoadedSaleToIdempotentWorkflowResult(
+  sale: NfeEmailDispatchSaleManualProcessingSnapshot,
+  erpSaleId: number,
+  attemptNumber: number,
+): ManualProcessNfeEmailDispatchSaleWorkflowResult | null {
+  if (sale.attemptCount < attemptNumber) {
+    return null;
+  }
+
+  switch (sale.status) {
+    case "SENT":
+    case "FAILED_TRANSIENT":
+    case "FAILED_FINAL":
+    case "DELIVERY_UNKNOWN":
+      return {
+        nfeEmailDispatchSaleId: sale.nfeEmailDispatchSaleId,
+        erpSaleId,
+        status: sale.status,
+        attemptCount: sale.attemptCount,
+        ...(sale.lastErrorMessage === null
+          ? {}
+          : { errorMessage: sale.lastErrorMessage }),
+      };
+    case "PENDING":
+    case "IN_PROGRESS":
+      return null;
+  }
+}
+
 async function completeAttemptLockBestEffort(input: {
   workflowId: string;
   nfeEmailDispatchSaleId: number;
@@ -312,8 +367,18 @@ function throwNotFound(message: string): never {
   throw ApplicationFailure.nonRetryable(message, MANUAL_SALE_NOT_FOUND_FAILURE_TYPE);
 }
 
-function throwConflict(message: string): never {
-  throw ApplicationFailure.nonRetryable(message, MANUAL_SALE_CONFLICT_FAILURE_TYPE);
+function throwAlreadySent(message: string): never {
+  throw ApplicationFailure.nonRetryable(
+    message,
+    MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE,
+  );
+}
+
+function throwAlreadyRunning(message: string): never {
+  throw ApplicationFailure.nonRetryable(
+    message,
+    MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE,
+  );
 }
 
 function throwInvalidInput(message: string): never {

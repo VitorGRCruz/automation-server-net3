@@ -15,6 +15,12 @@ export const cobrancasEquipmentRetrievalTriggerScheduleConfig = Object.freeze({
   intervalMinutes: env.cobrancasEquipmentRetrievalTriggerScheduleIntervalMinutes,
   taskQueue: env.cobrancasEquipmentRetrievalTriggerScheduleTaskQueue,
   workflowId: env.cobrancasEquipmentRetrievalTriggerScheduleWorkflowId,
+  timezone: env.cobrancasEquipmentRetrievalTriggerScheduleTimezone,
+  windowStartHour: env.cobrancasEquipmentRetrievalTriggerScheduleWindowStartHour,
+  windowStartMinute:
+    env.cobrancasEquipmentRetrievalTriggerScheduleWindowStartMinute,
+  windowEndHour: env.cobrancasEquipmentRetrievalTriggerScheduleWindowEndHour,
+  windowEndMinute: env.cobrancasEquipmentRetrievalTriggerScheduleWindowEndMinute,
   startAt: env.cobrancasEquipmentRetrievalTriggerStartAt,
 });
 

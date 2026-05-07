@@ -2,6 +2,7 @@ import {
   ScheduleAlreadyRunning,
   ScheduleNotFoundError,
   ScheduleOverlapPolicy,
+  type CalendarSpec,
   type Client,
   type ScheduleDescription,
   type ScheduleOptions,
@@ -133,11 +134,8 @@ function buildCreateScheduleOptions(): ScheduleOptions {
   return {
     scheduleId: scheduleConfig.scheduleId,
     spec: {
-      intervals: [
-        {
-          every: `${scheduleConfig.intervalMinutes} minutes`,
-        },
-      ],
+      calendars: buildWindowedCalendarSpecs(),
+      timezone: scheduleConfig.timezone,
     },
     action: {
       type: "startWorkflow",
@@ -223,4 +221,45 @@ function readScheduleIntervalMinutes(scheduleDescription: ScheduleDescription): 
   }
 
   return temporalConfig.schedules.cobrancasEquipmentRetrievalVerification.intervalMinutes;
+}
+
+function buildWindowedCalendarSpecs(): CalendarSpec[] {
+  const scheduleConfig = temporalConfig.schedules.cobrancasEquipmentRetrievalVerification;
+  const windowStartInMinutes =
+    scheduleConfig.windowStartHour * 60 + scheduleConfig.windowStartMinute;
+  const windowEndInMinutes =
+    scheduleConfig.windowEndHour * 60 + scheduleConfig.windowEndMinute;
+
+  if (windowStartInMinutes > windowEndInMinutes) {
+    throw new Error(
+      "Cobrancas equipment retrieval schedule window must start before or at the end time",
+    );
+  }
+
+  const minutesByHour = new Map<number, number[]>();
+
+  for (
+    let currentMinuteOfDay = windowStartInMinutes;
+    currentMinuteOfDay <= windowEndInMinutes;
+    currentMinuteOfDay += scheduleConfig.intervalMinutes
+  ) {
+    const hour = Math.floor(currentMinuteOfDay / 60);
+    const minute = currentMinuteOfDay % 60;
+    const minutes = minutesByHour.get(hour);
+
+    if (minutes === undefined) {
+      minutesByHour.set(hour, [minute]);
+
+      continue;
+    }
+
+    minutes.push(minute);
+  }
+
+  return Array.from(minutesByHour.entries(), ([hour, minute]) => ({
+    hour,
+    minute,
+    second: 0,
+    comment: `Run every ${scheduleConfig.intervalMinutes} minutes within the configured daily window`,
+  }));
 }

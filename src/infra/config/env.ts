@@ -343,6 +343,34 @@ export const env = Object.freeze({
     "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_WORKFLOW_ID",
     "cobrancas-equipment-retrieval-verification/schedule",
   ),
+  cobrancasEquipmentRetrievalTriggerScheduleTimezone: readStringEnv(
+    "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_TIMEZONE",
+    readStringEnv("TZ", "UTC"),
+  ),
+  cobrancasEquipmentRetrievalTriggerScheduleWindowStartHour: readIntegerRangeEnv(
+    "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_WINDOW_START_HOUR",
+    8,
+    0,
+    23,
+  ),
+  cobrancasEquipmentRetrievalTriggerScheduleWindowStartMinute: readIntegerRangeEnv(
+    "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_WINDOW_START_MINUTE",
+    30,
+    0,
+    59,
+  ),
+  cobrancasEquipmentRetrievalTriggerScheduleWindowEndHour: readIntegerRangeEnv(
+    "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_WINDOW_END_HOUR",
+    20,
+    0,
+    23,
+  ),
+  cobrancasEquipmentRetrievalTriggerScheduleWindowEndMinute: readIntegerRangeEnv(
+    "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_SCHEDULE_WINDOW_END_MINUTE",
+    30,
+    0,
+    59,
+  ),
   cobrancasEquipmentRetrievalTriggerStartAt: readStringEnv(
     "COBRANCAS_EQUIPMENT_RETRIEVAL_TRIGGER_START_AT",
     "2026-01-01 00:00:00",

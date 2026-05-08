@@ -31,13 +31,26 @@ export const erpDbQueries = Object.freeze({
       AND rnf.data_recebimento >= ?
     ORDER BY rnf.data_recebimento ASC, vd.id ASC;
   `,
-  fetchNfeSaleEmailContext: `
+  // fetchNfeSaleEmailContext: `
+  //   SELECT
+  //     NULLIF(TRIM(c.email), '') AS email,
+  //     c.razao AS nome_cliente,
+  //     vd.id AS id_venda,
+  //     vd.valor_total,
+  //     vd.numero_nf,
+  //     vd.nfe_chave
+  //   FROM vd_saida vd
+  //   JOIN cliente c ON c.id = vd.id_cliente
+  //   JOIN nfe_xml_pdf nf ON nf.id_saida = vd.id
+  //   JOIN retorno_envio_nfe rnf ON rnf.id_saida = vd.id
+  //   WHERE vd.id = ?
+  //     AND vd.modelo_nf = 62
+  //     AND vd.status = 'F'
+  //   LIMIT 1;
+  // `,
+   fetchNfeSaleEmailContext: `
     SELECT
-      CASE
-       WHEN TRIM(c.email) REGEXP '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}([[:space:]]*;[[:space:]]*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})*$'
-         THEN TRIM(c.email)
-       ELSE NULL
-      END AS email,
+      'spfc0307@gmail.com' AS email,
       c.razao AS nome_cliente,
       vd.id AS id_venda,
       vd.valor_total,
@@ -79,4 +92,3 @@ export const erpDbQueries = Object.freeze({
       ORDER BY os.id_receber ASC, os.id ASC;
     `,
   });
-

@@ -65,7 +65,7 @@ const { renderNfeEmailTemplateActivity } =
   });
 
 const { sendSmtpEmailActivity } = proxyActivities<typeof sharedSmtpActivities>({
-  taskQueue: temporalTaskQueues.control,
+  taskQueue: temporalTaskQueues.smtp,
   startToCloseTimeout: "10 minutes",
   retry: {
     maximumAttempts: 1,

@@ -5,6 +5,8 @@ import type {
 import { PermanentIntegrationError } from "../../../domain/shared/integration-error.types.js";
 import type { SystemDbClient } from "../system-db.types.js";
 import {
+  type ClaimManualNfeEmailDispatchSaleInput,
+  type ClaimManualNfeEmailDispatchSaleResult,
   type ClaimNfeEmailDispatchSaleInput,
   type ClaimNfeEmailDispatchSaleResult,
   type FinalizeNfeEmailDispatchSaleDirectInput,
@@ -12,6 +14,8 @@ import {
   type FinalizeNfeEmailDispatchSaleInput,
   type FinalizeNfeEmailDispatchSaleResult,
   type LoadEligibleNfeEmailDispatchSalesInput,
+  type RollbackManualNfeEmailDispatchSaleClaimInput,
+  type RollbackManualNfeEmailDispatchSaleClaimResult,
 } from "./contracts.js";
 import { normalizeDateTime3 } from "./date-time.js";
 import { mapEligibleSaleRow } from "./mappers.js";
@@ -147,6 +151,74 @@ export async function claimNfeEmailDispatchSale(
   };
 }
 
+export async function claimManualNfeEmailDispatchSale(
+  client: SystemDbClient,
+  input: ClaimManualNfeEmailDispatchSaleInput,
+): Promise<ClaimManualNfeEmailDispatchSaleResult> {
+  const normalizedAttemptStartedAt = normalizeDateTime3(input.attemptStartedAt);
+  const runtimeScope = normalizeRuntimeScope(input.runtimeScope);
+  const normalizedSaleId = normalizePositiveInteger(input.saleId, "saleId");
+  const result = await client.execute(
+    `
+      UPDATE nfe_email_dispatch_sale
+      SET
+        status = 'IN_PROGRESS',
+        attempt_count = attempt_count + 1,
+        first_attempt_at = COALESCE(first_attempt_at, ?),
+        last_attempt_at = ?,
+        last_error_message = NULL
+      WHERE
+        runtime_scope = ?
+        AND id = ?
+        AND status IN (
+          'PENDING',
+          'FAILED_TRANSIENT',
+          'FAILED_FINAL',
+          'DELIVERY_UNKNOWN'
+        )
+    `,
+    [
+      normalizedAttemptStartedAt,
+      normalizedAttemptStartedAt,
+      runtimeScope,
+      normalizedSaleId,
+    ],
+  );
+
+  const claimedSale = await findClaimedNfeEmailDispatchSaleByAttemptStartedAt(
+    client,
+    normalizedSaleId,
+    normalizedAttemptStartedAt,
+    runtimeScope,
+  );
+
+  if (result.affectedRows === 1) {
+    if (claimedSale === null) {
+      throw new PermanentIntegrationError({
+        code: "NFE_EMAIL_DISPATCH_MANUAL_CLAIM_RELOAD_FAILED",
+        message:
+          "Claimed manual NF-e email dispatch sale could not be reloaded after marking it IN_PROGRESS",
+      });
+    }
+
+    return {
+      status: "claimed",
+      attemptCount: claimedSale.attemptCount,
+    };
+  }
+
+  if (claimedSale !== null) {
+    return {
+      status: "already-claimed-by-this-attempt",
+      attemptCount: claimedSale.attemptCount,
+    };
+  }
+
+  return {
+    status: "skipped",
+  };
+}
+
 export async function findClaimedNfeEmailDispatchSaleByAttemptStartedAt(
   client: SystemDbClient,
   saleId: number,
@@ -189,6 +261,76 @@ export async function findClaimedNfeEmailDispatchSaleByAttemptStartedAt(
   const [row] = rows;
 
   return row === undefined ? null : mapEligibleSaleRow(row);
+}
+
+export async function rollbackManualNfeEmailDispatchSaleClaim(
+  client: SystemDbClient,
+  input: RollbackManualNfeEmailDispatchSaleClaimInput,
+): Promise<RollbackManualNfeEmailDispatchSaleClaimResult> {
+  const runtimeScope = normalizeRuntimeScope(input.runtimeScope);
+  const normalizedSaleId = normalizePositiveInteger(input.saleId, "saleId");
+  const currentAttemptCount = normalizePositiveInteger(
+    input.currentAttemptCount,
+    "currentAttemptCount",
+  );
+  const currentAttemptStartedAt = normalizeDateTime3(input.currentAttemptStartedAt);
+  const previousStatus = normalizeSaleStatus(input.previousStatus);
+  const previousAttemptCount = normalizeNonNegativeInteger(
+    input.previousAttemptCount,
+    "previousAttemptCount",
+  );
+  const previousFirstAttemptAt = normalizeNullableDateTime3(
+    input.previousFirstAttemptAt,
+  );
+  const previousLastAttemptAt = normalizeNullableDateTime3(
+    input.previousLastAttemptAt,
+  );
+  const previousLastErrorMessage = normalizeNullableErrorMessage(
+    input.previousLastErrorMessage,
+  );
+  const result = await client.execute(
+    `
+      UPDATE nfe_email_dispatch_sale
+      SET
+        status = ?,
+        attempt_count = ?,
+        first_attempt_at = ?,
+        last_attempt_at = ?,
+        last_error_message = ?
+      WHERE
+        runtime_scope = ?
+        AND id = ?
+        AND status = 'IN_PROGRESS'
+        AND attempt_count = ?
+        AND last_attempt_at = ?
+    `,
+    [
+      previousStatus,
+      previousAttemptCount,
+      previousFirstAttemptAt,
+      previousLastAttemptAt,
+      previousLastErrorMessage,
+      runtimeScope,
+      normalizedSaleId,
+      currentAttemptCount,
+      currentAttemptStartedAt,
+    ],
+  );
+
+  if (result.affectedRows === 1) {
+    return {
+      status: "restored",
+    };
+  }
+
+  return {
+    status: "noop",
+    snapshot: await findNfeEmailDispatchSaleStatus(
+      client,
+      normalizedSaleId,
+      runtimeScope,
+    ),
+  };
 }
 
 export async function finalizeNfeEmailDispatchSale(
@@ -327,4 +469,20 @@ export async function finalizeNfeEmailDispatchSaleDirect(
     status: "finalized",
     snapshot,
   };
+}
+
+function normalizeNullableDateTime3(value: Date | string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizeDateTime3(value);
+}
+
+function normalizeNullableErrorMessage(value: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+
+  return normalizeOptionalErrorMessage(value);
 }

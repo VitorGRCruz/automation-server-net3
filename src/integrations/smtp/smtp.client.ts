@@ -3,6 +3,7 @@ import { access, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import nodemailer from "nodemailer";
 import type { SendMailOptions } from "nodemailer";
+import type SMTPPool from "nodemailer/lib/smtp-pool/index.js";
 import type SMTPTransport from "nodemailer/lib/smtp-transport/index.js";
 import {
   PermanentIntegrationError,
@@ -44,6 +45,49 @@ const SMTP_CONNECTION_ERROR_CODES = new Set([
   "EHOSTUNREACH",
 ]);
 const SMTP_ATTACHMENT_ERROR_CODES = new Set(["EFILEACCESS", "ESTREAM"]);
+const SMTP_TRANSIENT_AUTH_RESPONSE_CODES = new Set([421, 432, 454, 455]);
+const SMTP_AUTH_RESPONSE_CODES = new Set([
+  ...SMTP_TRANSIENT_AUTH_RESPONSE_CODES,
+  534,
+  535,
+]);
+const SMTP_TRANSIENT_AUTH_MESSAGE_PATTERNS = [
+  "temporary authentication failure",
+  "authentication failed temporarily",
+  "try again later",
+  "too many login attempts",
+  "too many authentication failures",
+  "too many auth attempts",
+  "too many attempts",
+  "temporarily blocked",
+  "temporarily unavailable",
+  "temporarily locked",
+  "rate limit",
+  "rate exceeded",
+  "login rate exceeded",
+  "throttl",
+  "server busy",
+  "service not available",
+  "quota exceeded",
+];
+const SMTP_INVALID_CREDENTIAL_MESSAGE_PATTERNS = [
+  "invalid login",
+  "invalid credentials",
+  "bad credentials",
+  "authentication credentials invalid",
+  "username and password not accepted",
+  "user and password not accepted",
+  "wrong password",
+  "unknown user",
+  "no such user",
+  "authentication unsuccessful",
+  "5.7.8",
+  "5.7.3 authentication unsuccessful",
+];
+const DEFAULT_SMTP_POOL_MAX_CONNECTIONS = 1;
+const DEFAULT_SMTP_POOL_MAX_MESSAGES = 100;
+const DEFAULT_SMTP_POOL_RATE_DELTA_MS = 60_000;
+const DEFAULT_SMTP_POOL_RATE_LIMIT = 20;
 
 let sharedSmtpClient: SmtpClient | null = null;
 let sharedSmtpScope: SmtpScope | null = null;
@@ -88,6 +132,8 @@ export function createSmtpClient(
         transport.close?.();
       }
     },
+
+    close(): void {},
   };
 }
 
@@ -96,9 +142,20 @@ export function getSharedSmtpClient(): SmtpClient {
     return sharedSmtpClient;
   }
 
-  sharedSmtpClient = createSmtpClient(smtpTransportConfig);
+  sharedSmtpClient = createPooledSmtpClient(smtpTransportConfig);
 
   return sharedSmtpClient;
+}
+
+export async function closeSharedSmtpClient(): Promise<void> {
+  sharedSmtpScope = null;
+
+  if (sharedSmtpClient === null) {
+    return;
+  }
+
+  await sharedSmtpClient.close?.();
+  sharedSmtpClient = null;
 }
 
 export function createSmtpScope(
@@ -151,10 +208,41 @@ function createTransport(
 ): SmtpTransport {
   return nodemailer.createTransport(
     buildSmtpTransportOptions(config, auth),
-  ) as SmtpTransport;
+  ) as unknown as SmtpTransport;
+}
+
+function createPooledSmtpTransport(
+  config: SmtpTransportConfig,
+  auth: SmtpAuthConfig,
+): SmtpTransport {
+  return nodemailer.createTransport(
+    buildPooledSmtpTransportOptions(config, auth),
+  ) as unknown as SmtpTransport;
 }
 
 function buildSmtpTransportOptions(
+  config: SmtpTransportConfig,
+  auth: SmtpAuthConfig,
+): SMTPTransport.Options {
+  return buildBaseSmtpTransportOptions(config, auth);
+}
+
+function buildPooledSmtpTransportOptions(
+  config: SmtpTransportConfig,
+  auth: SmtpAuthConfig,
+): SMTPPool.Options {
+  return {
+    ...buildBaseSmtpTransportOptions(config, auth),
+    pool: true,
+    maxConnections:
+      config.pool?.maxConnections ?? DEFAULT_SMTP_POOL_MAX_CONNECTIONS,
+    maxMessages: config.pool?.maxMessages ?? DEFAULT_SMTP_POOL_MAX_MESSAGES,
+    rateDelta: config.pool?.rateDeltaMs ?? DEFAULT_SMTP_POOL_RATE_DELTA_MS,
+    rateLimit: config.pool?.rateLimit ?? DEFAULT_SMTP_POOL_RATE_LIMIT,
+  };
+}
+
+function buildBaseSmtpTransportOptions(
   config: SmtpTransportConfig,
   auth: SmtpAuthConfig,
 ): SMTPTransport.Options {
@@ -484,26 +572,8 @@ function normalizeSmtpError(error: unknown): Error {
   const code = smtpError.code?.toUpperCase();
   const command = smtpError.command?.toUpperCase();
   const message = error.message.toLowerCase();
-
-  if (
-    code === "EAUTH" ||
-    smtpError.responseCode === 535 ||
-    command?.startsWith("AUTH") === true
-  ) {
-    return new PermanentIntegrationError({
-      code: "SMTP_AUTH_FAILED",
-      message: "SMTP authentication failed",
-      cause: error,
-    });
-  }
-
-  if (code === "EENVELOPE") {
-    return new PermanentIntegrationError({
-      code: "SMTP_RECIPIENT_REJECTED",
-      message: "SMTP rejected the email envelope or one or more recipients",
-      cause: error,
-    });
-  }
+  const response = smtpError.response?.toLowerCase() ?? "";
+  const authContext = [message, response].filter((value) => value.length > 0).join("\n");
 
   if (code !== undefined && SMTP_ATTACHMENT_ERROR_CODES.has(code)) {
     return new PermanentIntegrationError({
@@ -544,6 +614,40 @@ function normalizeSmtpError(error: unknown): Error {
     });
   }
 
+  if (
+    isSmtpAuthStageError(smtpError, code, command, authContext)
+  ) {
+    if (hasTransientAuthEvidence(smtpError, authContext)) {
+      return new TransientIntegrationError({
+        code: "SMTP_AUTH_TEMPORARY_FAILURE",
+        message: "SMTP authentication failed temporarily",
+        cause: error,
+      });
+    }
+
+    if (hasInvalidCredentialEvidence(authContext)) {
+      return new PermanentIntegrationError({
+        code: "SMTP_AUTH_INVALID_CREDENTIALS",
+        message: "SMTP authentication failed due to invalid credentials",
+        cause: error,
+      });
+    }
+
+    return new TransientIntegrationError({
+      code: "SMTP_AUTH_TEMPORARY_FAILURE",
+      message: "SMTP authentication failed temporarily",
+      cause: error,
+    });
+  }
+
+  if (code === "EENVELOPE") {
+    return new PermanentIntegrationError({
+      code: "SMTP_RECIPIENT_REJECTED",
+      message: "SMTP rejected the email envelope or one or more recipients",
+      cause: error,
+    });
+  }
+
   if (message.includes("timed out") || message.includes("timeout")) {
     return new TransientIntegrationError({
       code: "SMTP_TIMEOUT",
@@ -557,4 +661,123 @@ function normalizeSmtpError(error: unknown): Error {
     message: "SMTP request failed with an unknown transient condition",
     cause: error,
   });
+}
+
+function createPooledSmtpClient(
+  config: SmtpTransportConfig = smtpTransportConfig,
+): SmtpClient {
+  const pooledTransports = new Map<string, SmtpTransport>();
+
+  return {
+    async probe(input): Promise<void> {
+      const auth = normalizeAuthConfig(input.auth);
+      const transport = createTransport(config, auth);
+
+      try {
+        await transport.verify();
+      } catch (error) {
+        throw normalizeSmtpError(error);
+      } finally {
+        transport.close?.();
+      }
+    },
+
+    async send(input): Promise<SmtpSendOutput> {
+      const auth = normalizeAuthConfig(input.auth);
+      const message = await prepareMessage(input);
+      const transportCacheKey = buildTransportCacheKey(auth);
+      const transport =
+        pooledTransports.get(transportCacheKey) ??
+        createAndCachePooledTransport(transportCacheKey, auth);
+
+      try {
+        const output = normalizeSendOutput(await transport.sendMail(message));
+
+        if (output.rejected.length > 0 || output.pending.length > 0) {
+          throw new PermanentIntegrationError({
+            code: "SMTP_RECIPIENT_REJECTED",
+            message:
+              "SMTP server rejected one or more recipients while sending the email",
+          });
+        }
+
+        return output;
+      } catch (error) {
+        closeCachedTransport(transportCacheKey);
+        throw normalizeSmtpError(error);
+      }
+    },
+
+    close(): void {
+      for (const transport of pooledTransports.values()) {
+        transport.close?.();
+      }
+
+      pooledTransports.clear();
+    },
+  };
+
+  function createAndCachePooledTransport(
+    cacheKey: string,
+    auth: SmtpAuthConfig,
+  ): SmtpTransport {
+    const transport = createPooledSmtpTransport(config, auth);
+
+    pooledTransports.set(cacheKey, transport);
+
+    return transport;
+  }
+
+  function closeCachedTransport(cacheKey: string): void {
+    const transport = pooledTransports.get(cacheKey);
+
+    if (transport === undefined) {
+      return;
+    }
+
+    transport.close?.();
+    pooledTransports.delete(cacheKey);
+  }
+}
+
+function buildTransportCacheKey(auth: SmtpAuthConfig): string {
+  return `${auth.username}\u0000${auth.password}`;
+}
+
+function isSmtpAuthStageError(
+  smtpError: SmtpTransportError,
+  code: string | undefined,
+  command: string | undefined,
+  authContext: string,
+): boolean {
+  return (
+    code === "EAUTH" ||
+    command?.startsWith("AUTH") === true ||
+    (smtpError.responseCode !== undefined &&
+      SMTP_AUTH_RESPONSE_CODES.has(smtpError.responseCode)) ||
+    hasSmtpAuthKeyword(authContext)
+  );
+}
+
+function hasTransientAuthEvidence(
+  smtpError: SmtpTransportError,
+  authContext: string,
+): boolean {
+  return (
+    (smtpError.responseCode !== undefined &&
+      SMTP_TRANSIENT_AUTH_RESPONSE_CODES.has(smtpError.responseCode)) ||
+    hasAnyPattern(authContext, SMTP_TRANSIENT_AUTH_MESSAGE_PATTERNS)
+  );
+}
+
+function hasInvalidCredentialEvidence(authContext: string): boolean {
+  return hasAnyPattern(authContext, SMTP_INVALID_CREDENTIAL_MESSAGE_PATTERNS);
+}
+
+function hasSmtpAuthKeyword(authContext: string): boolean {
+  return hasAnyPattern(authContext, ["authenticat", "credential", "login"]);
+}
+
+function hasAnyPattern(value: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => value.includes(pattern));
 }

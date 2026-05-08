@@ -88,6 +88,16 @@ export const temporalConfig = Object.freeze({
               env.temporalOpaMaxConcurrentActivityTaskPolls,
           }),
     }),
+    smtp: Object.freeze({
+      maxConcurrentActivityTaskExecutions:
+        env.temporalSmtpMaxConcurrentActivityTaskExecutions,
+      ...(env.temporalSmtpMaxConcurrentActivityTaskPolls === undefined
+        ? {}
+        : {
+            maxConcurrentActivityTaskPolls:
+              env.temporalSmtpMaxConcurrentActivityTaskPolls,
+          }),
+    }),
     ixc: Object.freeze({
       maxConcurrentActivityTaskExecutions:
         env.temporalIxcMaxConcurrentActivityTaskExecutions,
@@ -110,6 +120,10 @@ export const temporalConfig = Object.freeze({
       maxActivitiesPerSecond: env.temporalOpaMaxActivitiesPerSecond,
       maxTaskQueueActivitiesPerSecond:
         env.temporalOpaMaxTaskQueueActivitiesPerSecond,
+    }),
+    smtp: Object.freeze({
+      maxActivitiesPerSecond: env.smtpMaxEmailsPerMinute / 60,
+      maxTaskQueueActivitiesPerSecond: env.smtpMaxEmailsPerMinute / 60,
     }),
     ixc: Object.freeze({
       maxActivitiesPerSecond: env.temporalIxcMaxActivitiesPerSecond,

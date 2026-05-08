@@ -1,0 +1,8 @@
+services:
+  temporal:
+    image: ${TEMPORAL_DEV_IMAGE:-temporalio/temporal:1.6.2@sha256:896dc523ec52eaa18873c45ddf9df83ecb33d7e12dd19481bf032565657c6028}
+    command: server start-dev --ip 0.0.0.0
+    ports:
+      - "${TEMPORAL_FRONTEND_PORT:-7233}:7233"
+      - "${TEMPORAL_UI_PORT:-8233}:8233"
+    restart: unless-stopped

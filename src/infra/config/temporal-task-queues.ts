@@ -4,6 +4,7 @@ export const temporalTaskQueues = Object.freeze({
   control: "automation-control",
   erpRead: "automation-erp-read",
   opa: "automation-opa",
+  smtp: "automation-smtp",
   ixc: "automation-ixc",
 });
 
@@ -17,6 +18,8 @@ export function resolveTemporalTaskQueueRoleMetricLabel(
       return "erp_read";
     case temporalTaskQueues.opa:
       return "opa";
+    case temporalTaskQueues.smtp:
+      return "smtp";
     case temporalTaskQueues.ixc:
       return "ixc";
     default:

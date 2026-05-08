@@ -11,6 +11,7 @@ import { sendCsatMessageActivity } from "../activities/csat/send-csat-message.ac
 import { checkNfeEmailDispatchDiscoveryRunningActivity } from "../activities/nfe/check-nfe-email-dispatch-discovery-running.activity.js";
 import { enqueueNfeEmailDispatchSalesActivity } from "../activities/nfe/enqueue-nfe-email-dispatch-sales.activity.js";
 import { finalizeManualNfeEmailDispatchSaleActivity } from "../activities/nfe/finalize-manual-nfe-email-dispatch-sale.activity.js";
+import { recoverManualNfeEmailDispatchSaleActivity } from "../activities/nfe/recover-manual-nfe-email-dispatch-sale.activity.js";
 import { claimNfeEmailDispatchSaleActivity } from "../activities/nfe/claim-nfe-email-dispatch-sale.activity.js";
 import { fetchCustomerNfeSalesCandidatesFromErpActivity } from "../activities/nfe/fetch-customer-nfe-sales-candidates-from-erp.activity.js";
 import { fetchNfePdfFromIxcActivity } from "../activities/nfe/fetch-nfe-pdf-from-ixc.activity.js";
@@ -30,7 +31,6 @@ import { sendSmtpEmailActivity } from "../activities/shared/send-smtp-email.acti
 
 export const controlWorkerActivities = Object.freeze({
   diagnosticsPingActivity,
-  sendSmtpEmailActivity,
   registerCsatTriggerFailureActivity,
   registerEquipmentRetrievalVerificationTriggerFailureActivity,
   loadNfeEmailDispatchCustomersActivity,
@@ -45,6 +45,11 @@ export const controlWorkerActivities = Object.freeze({
   renderNfeEmailTemplateActivity,
   finalizeNfeEmailDispatchSaleActivity,
   finalizeManualNfeEmailDispatchSaleActivity,
+  recoverManualNfeEmailDispatchSaleActivity,
+});
+
+export const smtpWorkerActivities = Object.freeze({
+  sendSmtpEmailActivity,
 });
 
 export const erpReadWorkerActivities = Object.freeze({

@@ -11,6 +11,7 @@ import { temporalTaskQueues } from "../../../infra/config/temporal-task-queues.j
 import type * as nfeLockActivities from "../../activities/nfe/nfe-email-dispatch-sale-attempt-lock.activity.js";
 import type * as nfeManualSaleActivities from "../../activities/nfe/load-nfe-email-dispatch-sale-for-manual-processing.activity.js";
 import type * as nfeManualFinalizeActivities from "../../activities/nfe/finalize-manual-nfe-email-dispatch-sale.activity.js";
+import type * as nfeManualRecoverActivities from "../../activities/nfe/recover-manual-nfe-email-dispatch-sale.activity.js";
 import type * as nfeIxcActivities from "../../activities/nfe/fetch-nfe-pdf-from-ixc.activity.js";
 import type * as nfeErpReadActivities from "../../activities/nfe/fetch-nfe-sale-email-context-from-erp.activity.js";
 import type * as nfeTemplateActivities from "../../activities/nfe/render-nfe-email-template.activity.js";
@@ -18,7 +19,6 @@ import type * as sharedSmtpActivities from "../../activities/shared/send-smtp-em
 import { normalizeAutomationRuntimePolicy } from "../shared/automation-runtime-policy.workflow.js";
 import {
   NFE_PROCESSING_ACTIVITY_RETRY_POLICY,
-  formatWorkflowNowAsDateTime3,
   readWorkflowErrorMessage,
 } from "./process-nfe-email-dispatch-sales.shared.js";
 import {
@@ -30,7 +30,6 @@ import {
 } from "./process-single-nfe-email-dispatch-sale.shared.js";
 
 const MANUAL_SALE_NOT_FOUND_FAILURE_TYPE = "NFE_MANUAL_SALE_NOT_FOUND";
-const MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE = "NFE_MANUAL_ALREADY_SENT";
 const MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE = "NFE_MANUAL_ALREADY_RUNNING";
 const MANUAL_SALE_INVALID_INPUT_FAILURE_TYPE = "NFE_MANUAL_SALE_INVALID_INPUT";
 
@@ -48,7 +47,7 @@ const {
   taskQueue: temporalTaskQueues.control,
   startToCloseTimeout: "2 minutes",
   retry: NFE_PROCESSING_ACTIVITY_RETRY_POLICY,
-  });
+});
 
 const { fetchNfeSaleEmailContextFromErpActivity } =
   proxyActivities<typeof nfeErpReadActivities>({
@@ -71,7 +70,7 @@ const { renderNfeEmailTemplateActivity } =
   });
 
 const { sendSmtpEmailActivity } = proxyActivities<typeof sharedSmtpActivities>({
-  taskQueue: temporalTaskQueues.control,
+  taskQueue: temporalTaskQueues.smtp,
   startToCloseTimeout: "10 minutes",
   retry: {
     maximumAttempts: 1,
@@ -85,71 +84,84 @@ const { finalizeManualNfeEmailDispatchSaleActivity } =
     retry: NFE_PROCESSING_ACTIVITY_RETRY_POLICY,
   });
 
+const { recoverManualNfeEmailDispatchSaleActivity } =
+  proxyActivities<typeof nfeManualRecoverActivities>({
+    taskQueue: temporalTaskQueues.control,
+    startToCloseTimeout: "5 minutes",
+    retry: NFE_PROCESSING_ACTIVITY_RETRY_POLICY,
+  });
+
 export async function processManualNfeEmailDispatchSaleWorkflow(
   input: ManualProcessNfeEmailDispatchSaleWorkflowInput,
 ): Promise<ManualProcessNfeEmailDispatchSaleWorkflowResult> {
   const currentWorkflowInfo = workflowInfo();
   const runtimePolicy = normalizeAutomationRuntimePolicy(input.runtimePolicy);
-  const attemptStartedAt = formatWorkflowNowAsDateTime3();
-  const loadedSale = await loadManualSaleOrFail(
-    input.nfeEmailDispatchSaleId,
-    runtimePolicy.idempotencyScope,
-  );
-
-  validateManualWorkflowInput(input, loadedSale);
-
-  if (loadedSale.status === "SENT") {
-    throwAlreadySent(
-      `NF-e sale ${input.nfeEmailDispatchSaleId} was already sent and cannot be reprocessed manually`,
-    );
-  }
-
-  const attemptNumber = loadedSale.attemptCount + 1;
-  const lockResult = await acquireNfeEmailDispatchSaleAttemptLockActivity({
-    requestId: input.requestId,
-    workflowId: currentWorkflowInfo.workflowId,
-    nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
-    attemptNumber,
-    runtimeScope: runtimePolicy.idempotencyScope,
-  });
   let leaseToken: string | null = null;
-
-  switch (lockResult.status) {
-    case "ACQUIRED":
-      leaseToken = lockResult.leaseToken;
-      break;
-    case "PENDING":
-      return throwAlreadyRunning(
-        `NF-e sale ${input.nfeEmailDispatchSaleId} is already being processed for attempt ${attemptNumber}`,
-      );
-    case "ALREADY_PROCESSED": {
-      const reloadedSale = await loadManualSaleOrFail(
-        input.nfeEmailDispatchSaleId,
-        runtimePolicy.idempotencyScope,
-      );
-      const idempotentResult = mapLoadedSaleToIdempotentWorkflowResult(
-        reloadedSale,
-        input.erpSaleId,
-        attemptNumber,
-      );
-
-      if (idempotentResult !== null) {
-        return idempotentResult;
-      }
-
-      throw new Error(
-        `NF-e sale ${input.nfeEmailDispatchSaleId} reported a completed manual attempt ${attemptNumber}, ` +
-          `but its persisted snapshot is status ${reloadedSale.status} with attemptCount ${reloadedSale.attemptCount}`,
-      );
-    }
-  }
-
   let finalResult: FinalizeManualNfeEmailDispatchSaleActivityResult | null = null;
+  let finalizationTarget: {
+    status: "SENT" | "FAILED_TRANSIENT" | "FAILED_FINAL" | "DELIVERY_UNKNOWN";
+    errorMessage?: string;
+  } | null = null;
 
   try {
-    const finalizationInput = await executeManualSaleProcessing({
+    const loadedSale = await loadManualSaleOrFail(
+      input.nfeEmailDispatchSaleId,
+      runtimePolicy.idempotencyScope,
+    );
+    const idempotentResult = mapLoadedSaleToIdempotentWorkflowResult(
+      loadedSale,
+      input.erpSaleId,
+      input.attemptCount,
+      input.attemptStartedAt,
+    );
+
+    if (idempotentResult !== null) {
+      return idempotentResult;
+    }
+
+    validateManualWorkflowInput(input, loadedSale);
+
+    const lockResult = await acquireNfeEmailDispatchSaleAttemptLockActivity({
+      requestId: input.requestId,
+      workflowId: currentWorkflowInfo.workflowId,
+      nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
+      attemptNumber: input.attemptCount,
+      runtimeScope: runtimePolicy.idempotencyScope,
+    });
+
+    switch (lockResult.status) {
+      case "ACQUIRED":
+        leaseToken = lockResult.leaseToken;
+        break;
+      case "PENDING":
+        return throwAlreadyRunning(
+          `NF-e sale ${input.nfeEmailDispatchSaleId} is already being processed for attempt ${input.attemptCount}`,
+        );
+      case "ALREADY_PROCESSED": {
+        const reloadedSale = await loadManualSaleOrFail(
+          input.nfeEmailDispatchSaleId,
+          runtimePolicy.idempotencyScope,
+        );
+        const idempotentAttemptResult = mapLoadedSaleToIdempotentWorkflowResult(
+          reloadedSale,
+          input.erpSaleId,
+          input.attemptCount,
+          input.attemptStartedAt,
+        );
+
+        if (idempotentAttemptResult !== null) {
+          return idempotentAttemptResult;
+        }
+
+        throw new Error(
+          `NF-e sale ${input.nfeEmailDispatchSaleId} reported a completed manual attempt ${input.attemptCount}, ` +
+            `but its persisted snapshot is status ${reloadedSale.status} with attemptCount ${reloadedSale.attemptCount}`,
+        );
+      }
+    }
+
+    finalizationTarget = await executeManualSaleProcessing({
       input,
-      attemptNumber,
       runtimeScope: runtimePolicy.idempotencyScope,
       workflowId: currentWorkflowInfo.workflowId,
       workflowType: currentWorkflowInfo.workflowType,
@@ -157,15 +169,39 @@ export async function processManualNfeEmailDispatchSaleWorkflow(
 
     finalResult = await finalizeManualNfeEmailDispatchSaleActivity({
       nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
-      expectedStatus: loadedSale.status,
-      expectedAttemptCount: loadedSale.attemptCount,
-      attemptStartedAt,
-      maxSendAttempts: input.maxSendAttempts,
-      status: finalizationInput.status,
+      attemptStartedAt: input.attemptStartedAt,
+      attemptCount: input.attemptCount,
+      status: finalizationTarget.status,
       runtimeScope: runtimePolicy.idempotencyScope,
-      ...(finalizationInput.errorMessage === undefined
+      ...(finalizationTarget.errorMessage === undefined
         ? {}
-        : { errorMessage: finalizationInput.errorMessage }),
+        : { errorMessage: finalizationTarget.errorMessage }),
+    });
+
+    return mapFinalizationResultToWorkflowResult(finalResult, input.erpSaleId);
+  } catch (error) {
+    if (shouldRethrowWithoutRecovery(error)) {
+      throw error;
+    }
+
+    finalizationTarget ??= buildUnexpectedManualRecoveryTarget(error);
+    finalResult = await recoverManualNfeEmailDispatchSaleActivity({
+      nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
+      attemptStartedAt: input.attemptStartedAt,
+      attemptCount: input.attemptCount,
+      status: finalizationTarget.status,
+      runtimeScope: runtimePolicy.idempotencyScope,
+      ...(finalizationTarget.errorMessage === undefined
+        ? {}
+        : { errorMessage: finalizationTarget.errorMessage }),
+    });
+
+    log.warn("Manual NF-e processing workflow recovered after an unexpected failure", {
+      workflowId: currentWorkflowInfo.workflowId,
+      nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
+      erpSaleId: input.erpSaleId,
+      recoveredStatus: finalResult.status,
+      technicalMessage: readWorkflowErrorMessage(error),
     });
 
     return mapFinalizationResultToWorkflowResult(finalResult, input.erpSaleId);
@@ -174,7 +210,7 @@ export async function processManualNfeEmailDispatchSaleWorkflow(
       await completeAttemptLockBestEffort({
         workflowId: currentWorkflowInfo.workflowId,
         nfeEmailDispatchSaleId: input.nfeEmailDispatchSaleId,
-        attemptNumber,
+        attemptNumber: input.attemptCount,
         runtimeScope: runtimePolicy.idempotencyScope,
         leaseToken,
         finalStatus: finalResult.status,
@@ -209,11 +245,28 @@ function validateManualWorkflowInput(
       `NF-e sale ${input.nfeEmailDispatchSaleId} is linked to erpSaleId ${loadedSale.erpSaleId}, but the request received ${input.erpSaleId}`,
     );
   }
+
+  if (loadedSale.status !== "IN_PROGRESS") {
+    throwInvalidInput(
+      `NF-e sale ${input.nfeEmailDispatchSaleId} is ${loadedSale.status}, but attempt ${input.attemptCount} requires IN_PROGRESS`,
+    );
+  }
+
+  if (loadedSale.attemptCount !== input.attemptCount) {
+    throwInvalidInput(
+      `NF-e sale ${input.nfeEmailDispatchSaleId} is at attemptCount ${loadedSale.attemptCount}, but the workflow received ${input.attemptCount}`,
+    );
+  }
+
+  if (loadedSale.lastAttemptAt !== normalizeAttemptStartedAt(input.attemptStartedAt)) {
+    throwInvalidInput(
+      `NF-e sale ${input.nfeEmailDispatchSaleId} is linked to lastAttemptAt ${loadedSale.lastAttemptAt}, but the workflow received ${input.attemptStartedAt}`,
+    );
+  }
 }
 
 async function executeManualSaleProcessing(input: {
   input: ManualProcessNfeEmailDispatchSaleWorkflowInput;
-  attemptNumber: number;
   runtimeScope: string;
   workflowId: string;
   workflowType: string;
@@ -240,7 +293,7 @@ async function executeManualSaleProcessing(input: {
     const pdfResult = await fetchNfePdfFromIxcActivity({
       nfeEmailDispatchSaleId: input.input.nfeEmailDispatchSaleId,
       erpSaleId: input.input.erpSaleId,
-      attemptCount: input.attemptNumber,
+      attemptCount: input.input.attemptCount,
     });
 
     processingStage = "render";
@@ -260,7 +313,7 @@ async function executeManualSaleProcessing(input: {
       },
       idempotencyKey: buildSmtpIdempotencyKey(
         input.input.nfeEmailDispatchSaleId,
-        input.attemptNumber,
+        input.input.attemptCount,
       ),
       message: {
         to: emailContextResult.data.recipients,
@@ -317,9 +370,13 @@ function mapFinalizationResultToWorkflowResult(
 function mapLoadedSaleToIdempotentWorkflowResult(
   sale: NfeEmailDispatchSaleManualProcessingSnapshot,
   erpSaleId: number,
-  attemptNumber: number,
+  attemptCount: number,
+  attemptStartedAt: string,
 ): ManualProcessNfeEmailDispatchSaleWorkflowResult | null {
-  if (sale.attemptCount < attemptNumber) {
+  if (
+    sale.attemptCount !== attemptCount ||
+    sale.lastAttemptAt !== normalizeAttemptStartedAt(attemptStartedAt)
+  ) {
     return null;
   }
 
@@ -363,15 +420,36 @@ async function completeAttemptLockBestEffort(input: {
   }
 }
 
-function throwNotFound(message: string): never {
-  throw ApplicationFailure.nonRetryable(message, MANUAL_SALE_NOT_FOUND_FAILURE_TYPE);
+function normalizeAttemptStartedAt(value: string): string {
+  return value.trim();
 }
 
-function throwAlreadySent(message: string): never {
-  throw ApplicationFailure.nonRetryable(
-    message,
-    MANUAL_SALE_ALREADY_SENT_FAILURE_TYPE,
+function buildUnexpectedManualRecoveryTarget(error: unknown): {
+  status: "FAILED_TRANSIENT";
+  errorMessage: string;
+} {
+  return {
+    status: "FAILED_TRANSIENT",
+    errorMessage: readWorkflowErrorMessage(error),
+  };
+}
+
+function shouldRethrowWithoutRecovery(error: unknown): boolean {
+  return (
+    isApplicationFailureType(error, MANUAL_SALE_NOT_FOUND_FAILURE_TYPE) ||
+    isApplicationFailureType(error, MANUAL_SALE_ALREADY_RUNNING_FAILURE_TYPE)
   );
+}
+
+function isApplicationFailureType(error: unknown, expectedType: string): boolean {
+  return (
+    error instanceof ApplicationFailure &&
+    error.type === expectedType
+  );
+}
+
+function throwNotFound(message: string): never {
+  throw ApplicationFailure.nonRetryable(message, MANUAL_SALE_NOT_FOUND_FAILURE_TYPE);
 }
 
 function throwAlreadyRunning(message: string): never {

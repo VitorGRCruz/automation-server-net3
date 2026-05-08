@@ -21,7 +21,7 @@ import {
 } from "../nfe/nfe-email-dispatch-api.service.js";
 import {
   ManualNfeEmailDispatchWorkflowError,
-  executeManualNfeEmailDispatchSaleWorkflow,
+  startManualNfeEmailDispatchSaleWorkflow,
 } from "../../temporal/client/nfe-email-dispatch-single-sale.client.js";
 
 const DEFAULT_LIMIT = 50;
@@ -39,17 +39,13 @@ interface ProcessSingleSaleRouteBody {
 type ManualProcessSingleSaleSeverity = "success" | "warning" | "error";
 
 type ExecutedManualWorkflowResult = Awaited<
-  ReturnType<typeof executeManualNfeEmailDispatchSaleWorkflow>
+  ReturnType<typeof startManualNfeEmailDispatchSaleWorkflow>
 >;
 
 interface ManualProcessSingleSaleSuccessResponse {
   ok: true;
-  code:
-    | "NFE_MANUAL_SENT"
-    | "NFE_MANUAL_FAILED_TRANSIENT"
-    | "NFE_MANUAL_FAILED_FINAL"
-    | "NFE_MANUAL_DELIVERY_UNKNOWN";
-  severity: "success" | "error";
+  code: "NFE_MANUAL_ACCEPTED";
+  severity: "success";
   message: string;
   workflowId: string;
   runId: string | null;
@@ -160,7 +156,7 @@ export async function nfeEmailDispatchRoute(
         async (request, reply) => {
           const input = normalizeProcessSingleSaleBody(request.body);
           try {
-            const execution = await executeManualNfeEmailDispatchSaleWorkflow({
+            const execution = await startManualNfeEmailDispatchSaleWorkflow({
               requestId: request.id,
               ...input,
             });
@@ -170,7 +166,7 @@ export async function nfeEmailDispatchRoute(
 
             logManualProcessSingleSaleSuccess(request, input, response);
 
-            return reply.status(200).send(response);
+            return reply.status(202).send(response);
           } catch (error) {
             if (!(error instanceof ManualNfeEmailDispatchWorkflowError)) {
               throw error;
@@ -196,9 +192,9 @@ function buildManualProcessSingleSaleSuccessResponse(
 ): ManualProcessSingleSaleSuccessResponse {
   return {
     ok: true,
-    code: resolveManualProcessSingleSaleSuccessCode(execution.result.status),
-    severity: execution.result.status === "SENT" ? "success" : "error",
-    message: resolveManualProcessSingleSaleSuccessMessage(execution.result),
+    code: "NFE_MANUAL_ACCEPTED",
+    severity: "success",
+    message: "NF-e aceita para processamento manual assíncrono.",
     workflowId: execution.workflowId,
     runId: execution.runId ?? null,
     result: execution.result,
@@ -215,40 +211,6 @@ function buildManualProcessSingleSaleErrorResponse(
     message: error.message,
     error: error.message,
   };
-}
-
-function resolveManualProcessSingleSaleSuccessCode(
-  status: ExecutedManualWorkflowResult["result"]["status"],
-): ManualProcessSingleSaleSuccessResponse["code"] {
-  switch (status) {
-    case "SENT":
-      return "NFE_MANUAL_SENT";
-    case "FAILED_TRANSIENT":
-      return "NFE_MANUAL_FAILED_TRANSIENT";
-    case "FAILED_FINAL":
-      return "NFE_MANUAL_FAILED_FINAL";
-    case "DELIVERY_UNKNOWN":
-      return "NFE_MANUAL_DELIVERY_UNKNOWN";
-  }
-}
-
-function resolveManualProcessSingleSaleSuccessMessage(
-  result: ExecutedManualWorkflowResult["result"],
-): string {
-  if (result.errorMessage?.trim()) {
-    return result.errorMessage;
-  }
-
-  switch (result.status) {
-    case "SENT":
-      return "NF-e reenviada por e-mail com sucesso.";
-    case "FAILED_TRANSIENT":
-      return "A tentativa manual falhou temporariamente.";
-    case "FAILED_FINAL":
-      return "A tentativa manual falhou em definitivo.";
-    case "DELIVERY_UNKNOWN":
-      return "A entrega do e-mail ficou em estado indefinido.";
-  }
 }
 
 function resolveManualProcessSingleSaleErrorSeverity(
@@ -277,18 +239,13 @@ function logManualProcessSingleSaleSuccess(
     responseCode: response.code,
     severity: response.severity,
     message: response.message,
-    finalStatus: response.result.status,
+    processingStatus: response.result.status,
     attemptCount: response.result.attemptCount,
+    attemptStartedAt: response.result.attemptStartedAt,
   };
-
-  if (response.result.status === "SENT") {
-    request.log.info(context, "Manual single NF-e email dispatch succeeded");
-    return;
-  }
-
-  request.log.warn(
+  request.log.info(
     context,
-    "Manual single NF-e email dispatch completed without confirmed success",
+    "Manual single NF-e email dispatch accepted for asynchronous processing",
   );
 }
 

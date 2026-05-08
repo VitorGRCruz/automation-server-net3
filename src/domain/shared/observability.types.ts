@@ -37,6 +37,7 @@ export type WorkerQueueRoleMetricLabel =
   | "control"
   | "erp_read"
   | "opa"
+  | "smtp"
   | "ixc"
   | "unknown";
 

@@ -231,7 +231,8 @@ export interface ManualProcessNfeEmailDispatchSaleWorkflowInput {
   requestId: string;
   nfeEmailDispatchSaleId: number;
   erpSaleId: number;
-  maxSendAttempts: number;
+  attemptCount: number;
+  attemptStartedAt: string;
   runtimePolicy?: AutomationRuntimePolicyInput;
 }
 
@@ -420,10 +421,8 @@ export interface CancelNfeEmailDispatchSaleAttemptLockActivityInput {
 
 export interface FinalizeManualNfeEmailDispatchSaleActivityInput {
   nfeEmailDispatchSaleId: number;
-  expectedStatus: NfeEmailDispatchSaleStatus;
-  expectedAttemptCount: number;
   attemptStartedAt: string;
-  maxSendAttempts: number;
+  attemptCount: number;
   status: NfeEmailDispatchFinalizationStatus;
   errorMessage?: string;
   runtimeScope: string;

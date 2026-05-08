@@ -20,6 +20,12 @@ export const smtpTransportConfig = Object.freeze({
     : {
         tlsServername: normalizedSmtpTlsServername,
       }),
+  pool: Object.freeze({
+    maxConnections: 1,
+    maxMessages: 100,
+    rateDeltaMs: 60_000,
+    rateLimit: Math.max(1, Math.floor(env.smtpMaxEmailsPerMinute)),
+  }),
 });
 
 if (

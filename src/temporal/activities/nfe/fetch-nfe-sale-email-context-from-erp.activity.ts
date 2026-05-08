@@ -12,6 +12,7 @@ import {
   TransientIntegrationError,
   isIntegrationError,
 } from "../../../domain/shared/integration-error.types.js";
+import { normalizeEmailRecipients } from "../../../domain/shared/email-address.js";
 import { getSharedErpDbClient } from "../../../integrations/erp-db/erp-db.client.js";
 import { erpDbQueries } from "../../../integrations/erp-db/erp-db.queries.js";
 
@@ -44,7 +45,7 @@ export async function fetchNfeSaleEmailContextFromErpActivity(
       };
     }
 
-    const recipients = normalizeRecipients(row.email);
+    const recipients = normalizeEmailRecipients(row.email);
 
     if (recipients.length === 0) {
       return {
@@ -89,19 +90,6 @@ function mapNfeSaleEmailContextRow(
     numeroNf: readScalarAsString(row.numero_nf, "numero_nf"),
     nfeChave: readNullableText(row.nfe_chave, "nfe_chave"),
   };
-}
-
-function normalizeRecipients(value: string | null): string[] {
-  if (value === null) {
-    return [];
-  }
-
-  return [...new Set(
-    value
-      .split(";")
-      .map((recipient) => recipient.trim())
-      .filter((recipient) => recipient.length > 0),
-  )];
 }
 
 function readRequiredText(value: unknown, fieldName: string): string {

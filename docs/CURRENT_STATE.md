@@ -18,7 +18,10 @@
 - o startup da API executa `runSystemDbMigrations()` antes de abrir a porta HTTP;
 - toda a configuração principal está centralizada em `src/infra/config/`, com defaults em `env.ts` e alguns aliases legados para ERP, IXC e SMTP;
 - o build também copia o template HTML de `nfe` para `dist/domain/nfe/templates/`, além das migrations SQL;
-- o `docker-compose.yml` atual sobe `temporal`, `system-db` e os quatro workers por padrão; a API só entra quando o profile `api` é ativado;
+- o stack Docker agora usa um `docker-compose.yml` base e dois overlays do Temporal, resolvidos por `scripts/docker-compose-stack.sh`;
+- quando `NODE_ENV=development` ou `TEMPORAL_DOCKER_MODE=development`, o overlay sobe `temporal server start-dev`;
+- quando `NODE_ENV=production` ou `TEMPORAL_DOCKER_MODE=production`, o overlay sobe um Temporal self-hosted com PostgreSQL dedicado, `temporal-ui` e `temporal-admin-tools`;
+- `pnpm docker:up` e `pnpm docker:up:api` resolvem o modo automaticamente; `pnpm docker:dev:*` e `pnpm docker:prod:*` permitem forçar o overlay explicitamente;
 - no `docker-compose.yml`, `worker-control` e `worker-ixc` agora compartilham o volume `nfe-email-dispatch-tmp` montado em `/var/tmp/nfe-email-dispatch` para permitir que o PDF buscado na IXC seja anexado depois pelo SMTP;
 - o `Dockerfile` é multi-stage e gera runtime imutável em `dist/`.
 
@@ -207,10 +210,18 @@ src/
   - `pnpm temporal:dev:nfe:discovery`
   - `pnpm temporal:dev:nfe:processing`
 - docker:
+  - `pnpm docker:up`
+  - `pnpm docker:up:api`
+  - `pnpm docker:down`
+  - `pnpm docker:logs`
   - `pnpm docker:dev:up`
   - `pnpm docker:dev:up:api`
   - `pnpm docker:dev:down`
   - `pnpm docker:dev:logs`
+  - `pnpm docker:prod:up`
+  - `pnpm docker:prod:up:api`
+  - `pnpm docker:prod:down`
+  - `pnpm docker:prod:logs`
 - validação estática:
   - `pnpm lint`
   - `pnpm typecheck`

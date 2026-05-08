@@ -14,7 +14,7 @@ import {
 import { getSharedSystemDbClient } from "../../../infra/system-db/system-db.client.js";
 import { resolveActivityRuntimeScope } from "../shared/activity-idempotency-scope.js";
 
-export async function finalizeManualNfeEmailDispatchSaleActivity(
+export async function recoverManualNfeEmailDispatchSaleActivity(
   input: FinalizeManualNfeEmailDispatchSaleActivityInput,
 ): Promise<FinalizeManualNfeEmailDispatchSaleActivityResult> {
   const validatedInput = validateInput(input);
@@ -32,29 +32,14 @@ export async function finalizeManualNfeEmailDispatchSaleActivity(
       ...(validatedInput.status === "SENT" ? { sentAt: new Date() } : {}),
     });
 
-    const snapshot = result.snapshot;
-
-    if (result.status === "noop") {
-      ensureIdempotentFinalization(
-        snapshot,
-        validatedInput.attemptCount,
-        validatedInput.status,
-      );
-    }
-
-    return {
-      nfeEmailDispatchSaleId: validatedInput.nfeEmailDispatchSaleId,
-      status: validatedInput.status,
-      attemptCount: validatedInput.attemptCount,
-      ...(validatedInput.errorMessage === undefined
-        ? {}
-        : { errorMessage: validatedInput.errorMessage }),
-      ...(validatedInput.status === "SENT"
-        ? { sentAt: snapshot?.sentAt ?? new Date().toISOString() }
-        : {}),
-    };
+    return mapSnapshotToFinalizationResult(
+      result.snapshot,
+      validatedInput.nfeEmailDispatchSaleId,
+      validatedInput.attemptCount,
+      validatedInput.attemptStartedAt,
+    );
   } catch (error) {
-    throw normalizeFinalizeManualSaleError(error);
+    throw normalizeRecoverManualSaleError(error);
   }
 }
 
@@ -68,20 +53,17 @@ function validateInput(
     input.nfeEmailDispatchSaleId <= 0
   ) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_INVALID_SALE_ID",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_INVALID_SALE_ID",
       message:
-        "NF-e manual finalization activity requires a positive nfeEmailDispatchSaleId",
+        "NF-e manual recovery activity requires a positive nfeEmailDispatchSaleId",
     });
   }
 
-  if (
-    !Number.isInteger(input.attemptCount) ||
-    input.attemptCount <= 0
-  ) {
+  if (!Number.isInteger(input.attemptCount) || input.attemptCount <= 0) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_INVALID_ATTEMPT_COUNT",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_INVALID_ATTEMPT_COUNT",
       message:
-        "NF-e manual finalization activity requires a positive attemptCount",
+        "NF-e manual recovery activity requires a positive attemptCount",
     });
   }
 
@@ -89,9 +71,9 @@ function validateInput(
 
   if (attemptStartedAt.length === 0) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_INVALID_ATTEMPT_STARTED_AT",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_INVALID_ATTEMPT_STARTED_AT",
       message:
-        "NF-e manual finalization activity requires a non-empty attemptStartedAt",
+        "NF-e manual recovery activity requires a non-empty attemptStartedAt",
     });
   }
 
@@ -107,53 +89,66 @@ function validateInput(
   };
 }
 
-function ensureIdempotentFinalization(
+function mapSnapshotToFinalizationResult(
   snapshot: NfeEmailDispatchSaleStatusSnapshot | null,
+  saleId: number,
   expectedAttemptCount: number,
-  expectedStatus: FinalizeManualNfeEmailDispatchSaleActivityResult["status"],
-): void {
+  expectedAttemptStartedAt: string,
+): FinalizeManualNfeEmailDispatchSaleActivityResult {
   if (snapshot === null) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_RECORD_NOT_FOUND",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_RECORD_NOT_FOUND",
       message:
-        "NF-e manual finalization could not confirm idempotency because the sale record no longer exists",
+        "NF-e manual recovery could not confirm the current persisted snapshot because the sale record no longer exists",
     });
   }
 
   if (snapshot.attemptCount !== expectedAttemptCount) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_ATTEMPT_MISMATCH",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_ATTEMPT_MISMATCH",
       message:
-        "NF-e manual finalization could not confirm idempotency because the current attemptCount differs from the expected attempt",
+        "NF-e manual recovery could not confirm the current persisted snapshot because the attemptCount differs from the expected manual attempt",
     });
   }
 
-  if (snapshot.status !== expectedStatus) {
+  if (snapshot.lastAttemptAt !== expectedAttemptStartedAt) {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_STATUS_MISMATCH",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_ATTEMPT_STARTED_AT_MISMATCH",
       message:
-        "NF-e manual finalization could not confirm idempotency because the current status differs from the expected status",
+        "NF-e manual recovery could not confirm the current persisted snapshot because the lastAttemptAt differs from the expected manual attempt",
     });
   }
 
-  if (expectedStatus === "SENT" && snapshot.sentAt === null) {
+  if (snapshot.status === "IN_PROGRESS" || snapshot.status === "PENDING") {
     throw new PermanentIntegrationError({
-      code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_SENT_AT_MISSING",
+      code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_STILL_IN_PROGRESS",
       message:
-        "NF-e manual finalization expected SENT with sentAt filled, but the current record is incomplete",
+        `NF-e manual recovery could not resolve sale ${saleId} because the persisted snapshot is still ${snapshot.status}`,
     });
   }
+
+  return {
+    nfeEmailDispatchSaleId: saleId,
+    status: snapshot.status,
+    attemptCount: snapshot.attemptCount,
+    ...(snapshot.lastErrorMessage === null
+      ? {}
+      : { errorMessage: snapshot.lastErrorMessage }),
+    ...(snapshot.status === "SENT" && snapshot.sentAt !== null
+      ? { sentAt: snapshot.sentAt }
+      : {}),
+  };
 }
 
-function normalizeFinalizeManualSaleError(error: unknown): Error {
+function normalizeRecoverManualSaleError(error: unknown): Error {
   if (isIntegrationError(error)) {
     return error;
   }
 
   return new TransientIntegrationError({
-    code: "NFE_EMAIL_DISPATCH_MANUAL_FINALIZATION_FAILED",
+    code: "NFE_EMAIL_DISPATCH_MANUAL_RECOVERY_FAILED",
     message:
-      "NF-e manual finalization failed with an unknown transient error",
+      "NF-e manual recovery failed with an unknown transient error",
     cause: error,
   });
 }

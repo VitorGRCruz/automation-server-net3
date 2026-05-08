@@ -30,6 +30,13 @@ export interface SmtpAuthConfig {
   password: string;
 }
 
+export interface SmtpPoolConfig {
+  maxConnections: number;
+  maxMessages: number;
+  rateDeltaMs: number;
+  rateLimit: number;
+}
+
 export interface SmtpTransportConfig {
   host: string;
   port: number;
@@ -40,6 +47,7 @@ export interface SmtpTransportConfig {
   dnsTimeoutMs: number;
   requireTls: boolean;
   tlsServername?: string;
+  pool?: SmtpPoolConfig;
 }
 
 export interface SmtpScopeConfig {
@@ -138,6 +146,7 @@ export interface SmtpTransport {
 export interface SmtpClient {
   probe(input: SmtpVerifyInput): Promise<void>;
   send(input: SmtpSendInput): Promise<SmtpSendOutput>;
+  close?(): void | Promise<void>;
 }
 
 export interface SmtpScope {

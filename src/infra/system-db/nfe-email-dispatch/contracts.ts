@@ -121,6 +121,46 @@ export type ClaimNfeEmailDispatchSaleResult =
       status: "skipped";
     };
 
+export interface ClaimManualNfeEmailDispatchSaleInput {
+  saleId: number;
+  attemptStartedAt: Date | string;
+  runtimeScope: string;
+}
+
+export type ClaimManualNfeEmailDispatchSaleResult =
+  | {
+      status: "claimed";
+      attemptCount: number;
+    }
+  | {
+      status: "already-claimed-by-this-attempt";
+      attemptCount: number;
+    }
+  | {
+      status: "skipped";
+    };
+
+export interface RollbackManualNfeEmailDispatchSaleClaimInput {
+  saleId: number;
+  runtimeScope: string;
+  currentAttemptCount: number;
+  currentAttemptStartedAt: Date | string;
+  previousStatus: NfeEmailDispatchSaleStatus;
+  previousAttemptCount: number;
+  previousFirstAttemptAt: Date | string | null;
+  previousLastAttemptAt: Date | string | null;
+  previousLastErrorMessage: string | null;
+}
+
+export type RollbackManualNfeEmailDispatchSaleClaimResult =
+  | {
+      status: "restored";
+    }
+  | {
+      status: "noop";
+      snapshot: NfeEmailDispatchSaleStatusSnapshot | null;
+    };
+
 export interface FinalizeNfeEmailDispatchSaleInput {
   saleId: number;
   attemptStartedAt: Date | string;

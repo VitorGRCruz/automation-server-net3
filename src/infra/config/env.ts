@@ -214,6 +214,14 @@ const temporalIxcMaxConcurrentActivityTaskExecutions = readNumberEnv(
   "TEMPORAL_IXC_MAX_CONCURRENT_ACTIVITY_TASK_EXECUTIONS",
   5,
 );
+const temporalSmtpMaxConcurrentActivityTaskExecutions = readNumberEnv(
+  "TEMPORAL_SMTP_MAX_CONCURRENT_ACTIVITY_TASK_EXECUTIONS",
+  1,
+);
+const smtpMaxEmailsPerMinute = readPositiveNumberEnv(
+  "SMTP_MAX_EMAILS_PER_MINUTE",
+  20,
+);
 const temporalErpReadMaxActivitiesPerSecond = readPositiveNumberEnv(
   "TEMPORAL_ERP_READ_MAX_ACTIVITIES_PER_SECOND",
   temporalErpReadMaxConcurrentActivityTaskExecutions,
@@ -278,6 +286,7 @@ export const env = Object.freeze({
   temporalErpReadMaxConcurrentActivityTaskExecutions,
   temporalOpaMaxConcurrentActivityTaskExecutions,
   temporalIxcMaxConcurrentActivityTaskExecutions,
+  temporalSmtpMaxConcurrentActivityTaskExecutions,
   temporalControlMaxConcurrentWorkflowTaskPolls: readOptionalNumberEnv(
     "TEMPORAL_CONTROL_MAX_CONCURRENT_WORKFLOW_TASK_POLLS",
   ),
@@ -293,12 +302,16 @@ export const env = Object.freeze({
   temporalIxcMaxConcurrentActivityTaskPolls: readOptionalNumberEnv(
     "TEMPORAL_IXC_MAX_CONCURRENT_ACTIVITY_TASK_POLLS",
   ),
+  temporalSmtpMaxConcurrentActivityTaskPolls: readOptionalNumberEnv(
+    "TEMPORAL_SMTP_MAX_CONCURRENT_ACTIVITY_TASK_POLLS",
+  ),
   temporalErpReadMaxActivitiesPerSecond,
   temporalErpReadMaxTaskQueueActivitiesPerSecond,
   temporalOpaMaxActivitiesPerSecond,
   temporalOpaMaxTaskQueueActivitiesPerSecond,
   temporalIxcMaxActivitiesPerSecond,
   temporalIxcMaxTaskQueueActivitiesPerSecond,
+  smtpMaxEmailsPerMinute,
   systemDbHost: readStringEnv("SYSTEM_DB_HOST", "localhost"),
   systemDbPort: readNumberEnv("SYSTEM_DB_PORT", 3306),
   systemDbDatabase: readStringEnv("SYSTEM_DB_DATABASE", "automation_server"),

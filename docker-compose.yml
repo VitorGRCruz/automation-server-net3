@@ -1,5 +1,7 @@
-# Ambiente local com build imutavel dos servicos Node.
-# Nao representa a topologia completa de producao.
+# Base comum do stack Docker.
+# O servico `temporal` e resolvido pelos overlays:
+# - docker-compose.temporal-dev.yml
+# - docker-compose.temporal-prod.yml
 x-node-image: &node-image automation-server-net3-runtime:local
 x-node-build: &node-build
   context: .
@@ -55,6 +57,8 @@ x-runtime-environment: &runtime-environment
   NFE_EMAIL_DISPATCH_MAX_CONCURRENT_CHILDREN: ${NFE_EMAIL_DISPATCH_MAX_CONCURRENT_CHILDREN:-5}
   NFE_EMAIL_DISPATCH_MAX_SEND_ATTEMPTS: ${NFE_EMAIL_DISPATCH_MAX_SEND_ATTEMPTS:-3}
   NFE_EMAIL_DISPATCH_PDF_TMP_DIR: ${NFE_EMAIL_DISPATCH_PDF_TMP_DIR:-/var/tmp/nfe-email-dispatch}
+  TEMPORAL_SMTP_MAX_CONCURRENT_ACTIVITY_TASK_EXECUTIONS: ${TEMPORAL_SMTP_MAX_CONCURRENT_ACTIVITY_TASK_EXECUTIONS:-1}
+  SMTP_MAX_EMAILS_PER_MINUTE: ${SMTP_MAX_EMAILS_PER_MINUTE:-20}
   ERP_DB_HOST: ${ERP_DB_HOST:-localhost}
   ERP_DB_PORT: ${ERP_DB_PORT:-3306}
   ERP_DB_DATABASE: ${ERP_DB_DATABASE:-}
@@ -87,14 +91,6 @@ x-node-service: &node-service
   restart: unless-stopped
 
 services:
-  temporal:
-    image: temporalio/temporal:1.6.2@sha256:896dc523ec52eaa18873c45ddf9df83ecb33d7e12dd19481bf032565657c6028
-    command: server start-dev --ip 0.0.0.0
-    ports:
-      - "7233:7233"
-      - "8233:8233"
-    restart: unless-stopped
-
   system-db:
     image: mariadb:11.4@sha256:3b4dfcc32247eb07adbebec0793afae2a8eafa6860ec523ee56af4d3dec42f7f
     command: ["mariadbd", "--default-time-zone=-04:00"]
@@ -149,6 +145,12 @@ services:
   worker-ixc:
     <<: *node-service
     command: ["node", "dist/temporal/worker/run-ixc-worker.js"]
+    volumes:
+      - nfe-email-dispatch-tmp:/var/tmp/nfe-email-dispatch
+
+  worker-smtp:
+    <<: *node-service
+    command: ["node", "dist/temporal/worker/run-smtp-worker.js"]
     volumes:
       - nfe-email-dispatch-tmp:/var/tmp/nfe-email-dispatch
 

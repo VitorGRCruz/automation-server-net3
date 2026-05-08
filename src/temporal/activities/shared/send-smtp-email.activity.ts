@@ -4,6 +4,8 @@ import {
   isPermanentIntegrationError,
   isTransientIntegrationError,
 } from "../../../domain/shared/integration-error.types.js";
+import { smtpTransportConfig } from "../../../infra/config/smtp.config.js";
+import { writeStructuredConsoleLog } from "../../../infra/runtime/structured-console-log.js";
 import { getSharedSystemDbClient } from "../../../infra/system-db/system-db.client.js";
 import {
   markWorkflowStepIdempotencyCompleted,
@@ -15,6 +17,7 @@ import type {
   SmtpAddressInput,
   SmtpEnvelope,
   SmtpScopeSendInput,
+  SmtpTransportError,
 } from "../../../integrations/smtp/smtp.types.js";
 import {
   buildSmtpDurableIdempotencyKey,
@@ -129,11 +132,15 @@ export async function sendSmtpEmailActivity(
 
     return result;
   } catch (error) {
-    if (isPermanentIntegrationError(error)) {
+    const normalizedError = normalizeSendSmtpEmailActivityError(error);
+
+    logSmtpFailure(validatedInput, idempotencyKey, normalizedError);
+
+    if (isPermanentIntegrationError(normalizedError)) {
       const result = buildSendSmtpEmailFailureResult(
         "permanent",
-        error.code,
-        error.message,
+        normalizedError.code,
+        normalizedError.message,
       );
 
       await markWorkflowStepIdempotencyFailed(systemDbClient, {
@@ -147,7 +154,7 @@ export async function sendSmtpEmailActivity(
       return result;
     }
 
-    throw normalizeSendSmtpEmailActivityError(error);
+    throw normalizedError;
   }
 }
 
@@ -383,4 +390,98 @@ function normalizeSendSmtpEmailActivityError(error: unknown): Error {
     message: "SMTP email activity failed with an unknown transient condition",
     cause: error,
   });
+}
+
+function logSmtpFailure(
+  input: SendSmtpEmailActivityInput,
+  durableIdempotencyKey: string,
+  error: Error,
+): void {
+  const transportError = readTransportErrorDetails(error);
+
+  writeStructuredConsoleLog(
+    isPermanentIntegrationError(error) ? "error" : "warn",
+    "SMTP email send failed",
+    {
+      requestId: input.requestId,
+      workflowId: input.executionContext.workflowId,
+      workflowName: input.executionContext.workflowName,
+      idempotencyScope: input.executionContext.idempotencyScope ?? null,
+      durableIdempotencyKey,
+      smtpHost: smtpTransportConfig.host,
+      smtpPort: smtpTransportConfig.port,
+      smtpSecure: smtpTransportConfig.secure,
+      integrationErrorCode: readIntegrationErrorCode(error),
+      failureKind: isPermanentIntegrationError(error)
+        ? "permanent"
+        : isTransientIntegrationError(error)
+          ? "transient"
+          : "unknown",
+      subject: input.message.subject,
+      toCount: countAddresses(input.message.to),
+      ccCount: countAddresses(input.message.cc),
+      bccCount: countAddresses(input.message.bcc),
+      attachmentCount: input.message.attachments?.length ?? 0,
+      transportCode: transportError?.code ?? null,
+      transportCommand: transportError?.command ?? null,
+      transportResponseCode: transportError?.responseCode ?? null,
+      transportResponse: transportError?.response ?? null,
+      transportErrno: transportError?.errno ?? null,
+      transportSyscall: transportError?.syscall ?? null,
+      transportRejectedErrors:
+        transportError?.rejectedErrors?.map((item) => ({
+          recipient: item.recipient ?? null,
+          code: item.code ?? null,
+          responseCode: item.responseCode ?? null,
+          command: item.command ?? null,
+          message: item.message ?? null,
+          response: item.response ?? null,
+        })) ?? [],
+    },
+    error,
+  );
+}
+
+function readIntegrationErrorCode(error: Error): string | null {
+  return "code" in error && typeof error.code === "string" ? error.code : null;
+}
+
+function readTransportErrorDetails(error: Error): SmtpTransportError | null {
+  if (isSmtpTransportError(error)) {
+    return error;
+  }
+
+  if (isSmtpTransportError(error.cause)) {
+    return error.cause;
+  }
+
+  return null;
+}
+
+function isSmtpTransportError(value: unknown): value is SmtpTransportError {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  if ("kind" in value) {
+    return false;
+  }
+
+  return (
+    "code" in value ||
+    "command" in value ||
+    "response" in value ||
+    "responseCode" in value ||
+    "errno" in value ||
+    "syscall" in value ||
+    "rejectedErrors" in value
+  );
+}
+
+function countAddresses(value: SmtpAddressInput | undefined): number {
+  if (value === undefined) {
+    return 0;
+  }
+
+  return Array.isArray(value) ? value.length : 1;
 }

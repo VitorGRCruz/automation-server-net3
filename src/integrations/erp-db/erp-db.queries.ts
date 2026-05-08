@@ -31,26 +31,9 @@ export const erpDbQueries = Object.freeze({
       AND rnf.data_recebimento >= ?
     ORDER BY rnf.data_recebimento ASC, vd.id ASC;
   `,
-  // fetchNfeSaleEmailContext: `
-  //   SELECT
-  //     NULLIF(TRIM(c.email), '') AS email,
-  //     c.razao AS nome_cliente,
-  //     vd.id AS id_venda,
-  //     vd.valor_total,
-  //     vd.numero_nf,
-  //     vd.nfe_chave
-  //   FROM vd_saida vd
-  //   JOIN cliente c ON c.id = vd.id_cliente
-  //   JOIN nfe_xml_pdf nf ON nf.id_saida = vd.id
-  //   JOIN retorno_envio_nfe rnf ON rnf.id_saida = vd.id
-  //   WHERE vd.id = ?
-  //     AND vd.modelo_nf = 62
-  //     AND vd.status = 'F'
-  //   LIMIT 1;
-  // `,
-   fetchNfeSaleEmailContext: `
+  fetchNfeSaleEmailContext: `
     SELECT
-      'spfc0307@gmail.com' AS email,
+      NULLIF(TRIM(c.email), '') AS email,
       c.razao AS nome_cliente,
       vd.id AS id_venda,
       vd.valor_total,
